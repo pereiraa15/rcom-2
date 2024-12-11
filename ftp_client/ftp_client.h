@@ -1,6 +1,19 @@
+/**
+ * @file ftp_client.h
+ * @brief Header file for a simple FTP client implementation
+ * 
+ * This file contains all the necessary declarations for implementing
+ * a basic FTP client that can connect to an FTP server, authenticate,
+ * and download files. It supports both anonymous and authenticated
+ * connections using the following URL formats:
+ * - ftp://<host>/<url-path>
+ * - ftp://[<user>:<password>@]<host>/<url-path>
+ */
+
 #ifndef FTP_CLIENT_H
 #define FTP_CLIENT_H
 
+/* Required system headers */
 #include <stdio.h>
 #include <sys/socket.h>
 #include <netinet/in.h>
@@ -15,59 +28,136 @@
 #include <pwd.h>
 #include <time.h>
 
-#define MAX_LENGTH 500
-#define FTP_PORT 21
-#define BUFFER_SIZE 1024
-#define DEFAULT_PORT 21
+/* Constants for buffer sizes and default values */
+#define MAX_LENGTH 500        /**< Maximum length for string buffers */
+#define FTP_PORT 21          /**< Default FTP control port */
+#define BUFFER_SIZE 1024     /**< Size for general purpose buffers */
+#define DEFAULT_PORT 21      /**< Default port for FTP connections */
+
+/** Pattern for parsing passive mode response */
 #define PASV_PORT_PATTERN "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)"
 
-/* Server responses */
-#define SV_READY4AUTH 220
-#define SV_READY4PASS 331
-#define SV_LOGINSUCCESS 230
-#define SV_PASSIVE 227
-#define SV_READY4TRANSFER 150
-#define SV_TRANSFER_COMPLETE 226
-#define SV_GOODBYE 221
+/* FTP Server Response Codes */
+#define SV_READY4AUTH 220      /**< Server ready for authentication */
+#define SV_READY4PASS 331      /**< Username OK, need password */
+#define SV_LOGINSUCCESS 230    /**< User logged in successfully */
+#define SV_PASSIVE 227         /**< Entering passive mode */
+#define SV_READY4TRANSFER 150  /**< File status okay; opening data connection */
+#define SV_TRANSFER_COMPLETE 226/**< Transfer completed successfully */
+#define SV_GOODBYE 221         /**< Server saying goodbye */
 
-/* Parser regular expressions */
-#define AT "@"
-#define BAR "/"
+/* URL Parsing Regular Expressions */
+#define AT "@"                 /**< Separator for user:pass@host */
+#define BAR "/"                /**< Path separator */
+/** Regex for extracting host from URL without credentials */
 #define HOST_REGEX "%*[^/]//%[^/]"
+/** Regex for extracting host from URL with credentials */
 #define HOST_AT_REGEX "%*[^/]//%*[^@]@%[^/]"
+/** Regex for extracting resource path */
 #define RESOURCE_REGEX "%*[^/]//%*[^/]/%s"
+/** Regex for extracting username */
 #define USER_REGEX "%*[^/]//%[^:/]"
+/** Regex for extracting password */
 #define PASS_REGEX "%*[^/]//%*[^:]:%[^@\n$]"
+/** Regex for extracting response code */
 #define RESPCODE_REGEX "%d"
+/** Regex for parsing passive mode response */
 #define PASSIVE_REGEX "%*[^(](%d,%d,%d,%d,%d,%d)%*[^\n$)]"
 
-/* Default login */
-#define DEFAULT_USER "rcom"
-#define DEFAULT_PASSWORD "rcom"
+/* Default credentials for anonymous login */
+#define DEFAULT_USER "rcom"        /**< Default username */
+#define DEFAULT_PASSWORD "rcom"    /**< Default password */
 
-/* URL structure */
+/**
+ * @struct URL
+ * @brief Structure to store parsed URL components
+ * 
+ * This structure holds all the components extracted from an FTP URL,
+ * including server information, credentials, and requested resource details.
+ */
 struct URL {
-    char host[MAX_LENGTH];     // 'ftp.up.pt'
-    char resource[MAX_LENGTH]; // 'parrot/misc/canary/warrant-canary-0.txt'
-    char file[MAX_LENGTH];     // 'warrant-canary-0.txt'
-    char user[MAX_LENGTH];     // 'username'
-    char password[MAX_LENGTH]; // 'password'
-    char ip[MAX_LENGTH];       // 193.137.29.15
+    char host[MAX_LENGTH];     /**< Server hostname (e.g., 'ftp.up.pt') */
+    char resource[MAX_LENGTH]; /**< Resource path (e.g., 'pub/file.txt') */
+    char file[MAX_LENGTH];     /**< File name extracted from resource path */
+    char user[MAX_LENGTH];     /**< Username for authentication */
+    char password[MAX_LENGTH]; /**< Password for authentication */
+    char ip[MAX_LENGTH];       /**< Resolved IP address of the host */
 };
 
-/* Function prototypes */
-// URL Parser
+/* Function Prototypes */
+
+/**
+ * @brief Parses an FTP URL into its components
+ * 
+ * @param input The FTP URL to parse
+ * @param url Pointer to URL structure to store parsed components
+ * @return int 0 on success, -1 on failure
+ */
 int parse(char *input, struct URL *url);
 
-// Socket operations
+/**
+ * @brief Creates and connects a socket to the specified address
+ * 
+ * @param ip Server IP address
+ * @param port Server port number
+ * @return int Socket file descriptor on success, -1 on failure
+ */
 int createSocket(char *ip, int port);
+
+/**
+ * @brief Closes an FTP connection properly
+ * 
+ * @param sock Socket to close
+ * @return int 0 on success, -1 on failure
+ */
 int closeConnection(int sock);
 
-// FTP Protocol
+/**
+ * @brief Authenticates with the FTP server
+ * 
+ * @param sock Control socket
+ * @param user Username
+ * @param pass Password
+ * @return int 0 on success, -1 on failure
+ */
 int authenticate(int sock, const char *user, const char *pass);
+
+/**
+ * @brief Enters passive mode for data transfer
+ * 
+ * @param sock Control socket
+ * @param addr Buffer to store data connection address
+ * @param port Pointer to store data connection port
+ * @return int 0 on success, -1 on failure
+ */
 int enterPassiveMode(int sock, char *addr, int *port);
+
+/**
+ * @brief Reads and parses server response
+ * 
+ * @param sock Socket to read from
+ * @param buffer Buffer to store response
+ * @return int Response code on success, -1 on failure
+ */
 int getServerResponse(int sock, char *buffer);
+
+/**
+ * @brief Downloads a file from the server
+ * 
+ * @param ctrlSock Control socket
+ * @param dataSock Data socket
+ * @param filename Name of file to save
+ * @return int 0 on success, -1 on failure
+ */
 int downloadFile(int ctrlSock, int dataSock, char *filename);
+
+/**
+ * @brief Requests a file from the server
+ * 
+ * @param sock Control socket
+ * @param path Path of file to request
+ * @return int 0 on success, -1 on failure
+ */
 int requestFile(int sock, char *path);
 
 #endif /* FTP_CLIENT_H */ 
