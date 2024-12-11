@@ -150,18 +150,23 @@ int authenticate(int sock, const char *user, const char *pass)
     char cmd[BUFFER_SIZE];
     char response[BUFFER_SIZE];
     int responseCode;
+    int finalResponseCode = -1;
 
-    // Keep reading responses until we get the final 220
+    // Keep reading responses until we get a complete response
     do
     {
         responseCode = getServerResponse(sock, response);
         if (responseCode < 0)
             return -1;
-    } while (response[3] == '-'); // Continue if it's a multi-line response
+            
+        if (responseCode > 0)  // Only update if we got a valid response code
+            finalResponseCode = responseCode;
+            
+    } while (responseCode == 0 || response[3] == '-');  // Continue while we get continuation responses
 
-    if (responseCode != SV_READY4AUTH)
+    if (finalResponseCode != SV_READY4AUTH)
     {
-        printf("Server not ready. Response code: %d\n", responseCode);
+        printf("Server not ready. Response code: %d\n", finalResponseCode);
         return -1;
     }
 
@@ -250,13 +255,21 @@ int getServerResponse(int sock, char *buffer)
         return -1;
     }
 
-    // Extract response code
-    memcpy(code, buffer, 3);
-    code[3] = '\0';
-    int response_code = atoi(code);
-
     printf("Server Response: %s", buffer);
-    return response_code;
+
+    // Check if the line starts with a digit
+    if (buffer[0] >= '0' && buffer[0] <= '9')
+    {
+        // Extract response code
+        memcpy(code, buffer, 3);
+        code[3] = '\0';
+        return atoi(code);
+    }
+    else
+    {
+        // If the line doesn't start with a digit, return the last known response code
+        return 0;  // Return 0 to indicate continuation of multi-line response
+    }
 }
 
 int downloadFile(int ctrlSock, int dataSock, char *filename)
@@ -266,19 +279,19 @@ int downloadFile(int ctrlSock, int dataSock, char *filename)
     char buffer[BUFFER_SIZE];
     int bytes;
     char filepath[MAX_LENGTH];
-    
+
     // Use relative path to Downloads folder in project directory
     snprintf(filepath, sizeof(filepath), "downloads/%s", filename);
-    
+
     if (!(file = fopen(filepath, "wb")))
     {
-        printf("Cannot create file in Downloads folder: %s (Error: %s)\n", 
+        printf("Cannot create file in Downloads folder: %s (Error: %s)\n",
                filepath, strerror(errno));
         return -1;
     }
 
     printf("Downloading to: %s\n", filepath);
-    
+
     while ((bytes = read(dataSock, buffer, BUFFER_SIZE)) > 0)
     {
         fwrite(buffer, bytes, 1, file);
@@ -298,7 +311,8 @@ int requestFile(int sock, char *path)
     write(sock, cmd, strlen(cmd));
 
     int responseCode = getServerResponse(sock, response);
-    if (responseCode != SV_READY4TRANSFER)
+    // Accept both 150 and 125 as valid response codes for transfer ready
+    if (responseCode != SV_READY4TRANSFER && responseCode != 125)
     {
         printf("Error requesting file. Server response: %s\n", response);
         return -1;
