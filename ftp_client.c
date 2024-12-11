@@ -105,6 +105,7 @@ int parse(char *input, struct URL *url)
 
 int createSocket(char *ip, int port)
 {
+    printf("\n=== SOCKET CREATION ===\n");
     int sockfd;
     struct sockaddr_in server_addr;
 
@@ -145,6 +146,7 @@ int createSocket(char *ip, int port)
 
 int authenticate(int sock, const char *user, const char *pass)
 {
+    printf("\n=== SERVER WELCOME ===\n");
     char cmd[BUFFER_SIZE];
     char response[BUFFER_SIZE];
     int responseCode;
@@ -163,6 +165,7 @@ int authenticate(int sock, const char *user, const char *pass)
         return -1;
     }
 
+    printf("\n=== AUTHENTICATION ===\n");
     // Now send username
     printf("Sending USER command...\n");
     sprintf(cmd, "USER %s\r\n", user);
@@ -191,6 +194,7 @@ int authenticate(int sock, const char *user, const char *pass)
 
 int enterPassiveMode(int sock, char *addr, int *port)
 {
+    printf("\n=== PASSIVE MODE ===\n");
     char cmd[] = "PASV\r\n";
     char response[BUFFER_SIZE];
     int ip[4], p[2];
@@ -257,6 +261,7 @@ int getServerResponse(int sock, char *buffer)
 
 int downloadFile(int ctrlSock, int dataSock, char *filename)
 {
+    printf("\n=== FILE DOWNLOAD ===\n");
     FILE *file;
     char buffer[BUFFER_SIZE];
     int bytes;
@@ -329,7 +334,7 @@ int main(int argc, char *argv[])
         return 1;
     }
 
-    printf("\n=== Connection Details ===\n");
+    printf("\n=== CONNECTION DETAILS ===\n");
     printf("Host: %s\n", url.host);
     printf("Resource: %s\n", url.resource);
     printf("File: %s\n", url.file);
@@ -337,7 +342,7 @@ int main(int argc, char *argv[])
     printf("Password: %s\n", url.password);
     printf("IP Address: %s\n", url.ip);
     printf("Port: %d\n", FTP_PORT);
-    printf("=======================\n\n");
+    printf("=======================\n");
 
     int ctrlSock = createSocket(url.ip, FTP_PORT);
     if (ctrlSock < 0)
