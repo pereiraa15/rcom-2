@@ -8,12 +8,13 @@
 #include <string.h>
 #include <regex.h>
 #include <termios.h>
+#include <errno.h>
 
 #define MAX_LENGTH 500
 #define FTP_PORT 21
 #define BUFFER_SIZE 1024
 #define DEFAULT_PORT 21
-#define PASV_PORT_PATTERN "%*[^0-9]%d,%d,%d,%d,%d,%d"
+#define PASV_PORT_PATTERN "227 Entering Passive Mode (%d,%d,%d,%d,%d,%d)"
 
 /* Server responses */
 #define SV_READY4AUTH 220
@@ -50,13 +51,15 @@ struct URL
     char ip[MAX_LENGTH];       // 193.137.29.15
 };
 
-typedef enum
-{
-    START,
-    SINGLE,
-    MULTIPLE,
-    END
-} ResponseState;
+/* Function prototypes */
+int parse(char *input, struct URL *url);
+int createSocket(char *ip, int port);
+int authenticate(int sock, const char *user, const char *pass);
+int enterPassiveMode(int sock, char *addr, int *port);
+int getServerResponse(int sock, char *buffer);
+int downloadFile(int ctrlSock, int dataSock, char *filename);
+int requestFile(int sock, char *path);
+int closeConnection(int sock);
 
 int parse(char *input, struct URL *url)
 {
@@ -129,10 +132,9 @@ int createSocket(char *ip, int port)
     if (connect(sockfd, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)
     {
         perror("connect()");
-        printf("Debug: Connection failed. Please verify:\n");
-        printf("1. You are connected to FEUP's VPN or network\n");
-        printf("2. The host is reachable (try 'ping %s')\n", ip);
-        printf("3. No firewall is blocking the connection\n");
+        printf("Debug: Connection failed to %s:%d\n", ip, port);
+        printf("Error code: %d\n", errno);
+        close(sockfd);
         return -1;
     }
 
@@ -144,15 +146,45 @@ int authenticate(int sock, const char *user, const char *pass)
 {
     char cmd[BUFFER_SIZE];
     char response[BUFFER_SIZE];
+    int responseCode;
 
+    // Keep reading responses until we get the final 220
+    do
+    {
+        responseCode = getServerResponse(sock, response);
+        if (responseCode < 0)
+            return -1;
+    } while (response[3] == '-'); // Continue if it's a multi-line response
+
+    if (responseCode != SV_READY4AUTH)
+    {
+        printf("Server not ready. Response code: %d\n", responseCode);
+        return -1;
+    }
+
+    // Now send username
+    printf("Sending USER command...\n");
     sprintf(cmd, "USER %s\r\n", user);
     write(sock, cmd, strlen(cmd));
-    read(sock, response, BUFFER_SIZE);
+    responseCode = getServerResponse(sock, response);
+    if (responseCode != SV_READY4PASS)
+    {
+        printf("Username not accepted (code %d)\n", responseCode);
+        return -1;
+    }
 
+    // Send password
+    printf("Sending PASS command...\n");
     sprintf(cmd, "PASS %s\r\n", pass);
     write(sock, cmd, strlen(cmd));
-    read(sock, response, BUFFER_SIZE);
+    responseCode = getServerResponse(sock, response);
+    if (responseCode != SV_LOGINSUCCESS)
+    {
+        printf("Password not accepted (code %d)\n", responseCode);
+        return -1;
+    }
 
+    printf("Authentication successful!\n");
     return 0;
 }
 
@@ -163,11 +195,23 @@ int enterPassiveMode(int sock, char *addr, int *port)
     int ip[4], p[2];
 
     write(sock, cmd, strlen(cmd));
-    read(sock, response, BUFFER_SIZE);
+    int responseCode = getServerResponse(sock, response);
+    if (responseCode != SV_PASSIVE)
+    {
+        printf("Error entering passive mode. Server response: %s\n", response);
+        return -1;
+    }
 
-    sscanf(response, PASV_PORT_PATTERN, &ip[0], &ip[1], &ip[2], &ip[3], &p[0], &p[1]);
+    if (sscanf(response, PASV_PORT_PATTERN, &ip[0], &ip[1], &ip[2], &ip[3], &p[0], &p[1]) != 6)
+    {
+        printf("Error parsing passive mode response: %s\n", response);
+        return -1;
+    }
+
     sprintf(addr, "%d.%d.%d.%d", ip[0], ip[1], ip[2], ip[3]);
     *port = p[0] * 256 + p[1];
+
+    printf("Passive mode: connecting to %s:%d\n", addr, *port);
 
     return 0;
 }
@@ -176,65 +220,38 @@ int getServerResponse(int sock, char *buffer)
 {
     char byte;
     char code[4];
-    int state = 0;
     int index = 0;
+    ssize_t bytes_read;
+    char temp_buffer[BUFFER_SIZE];
 
     memset(buffer, 0, BUFFER_SIZE);
+    memset(temp_buffer, 0, BUFFER_SIZE);
 
-    while (state != 3)
+    // Read the first line to get the response code
+    while ((bytes_read = read(sock, &byte, 1)) > 0)
     {
-
-        read(sock, &byte, 1);
-        buffer[index] = byte;
-        index++;
-
-        switch (state)
+        buffer[index++] = byte;
+        if (index >= 2 && buffer[index - 1] == '\n' && buffer[index - 2] == '\r')
         {
-        case 0:
-            if (index == 3)
-            {
-                memcpy(code, buffer, 3);
-                code[3] = '\0';
-                state = 1;
-            }
-            break;
-        case 1:
-            if (byte == '\n')
-            {
-                if (buffer[index - 2] == '\r')
-                {
-                    if (buffer[0] == code[0] &&
-                        buffer[1] == code[1] &&
-                        buffer[2] == code[2] &&
-                        buffer[3] == ' ')
-                    {
-                        state = 3;
-                    }
-                    else
-                        state = 2;
-                }
-            }
-            break;
-        case 2:
-            if (byte == '\n')
-            {
-                if (buffer[index - 2] == '\r')
-                {
-                    if (index >= 4 &&
-                        buffer[index - 5] == code[0] &&
-                        buffer[index - 4] == code[1] &&
-                        buffer[index - 3] == code[2] &&
-                        buffer[index - 2] == ' ')
-                    {
-                        state = 3;
-                    }
-                }
-            }
             break;
         }
+        if (index >= BUFFER_SIZE - 1)
+            return -1;
     }
 
-    return atoi(code);
+    if (bytes_read <= 0 || index < 3)
+    {
+        printf("Error reading from server\n");
+        return -1;
+    }
+
+    // Extract response code
+    memcpy(code, buffer, 3);
+    code[3] = '\0';
+    int response_code = atoi(code);
+
+    printf("Server Response: %s", buffer);
+    return response_code;
 }
 
 int downloadFile(int ctrlSock, int dataSock, char *filename)
@@ -242,27 +259,67 @@ int downloadFile(int ctrlSock, int dataSock, char *filename)
     FILE *file;
     char buffer[BUFFER_SIZE];
     int bytes;
+    size_t total_bytes = 0;
 
     if (!(file = fopen(filename, "wb")))
     {
-        printf("Cannot create file\n");
+        printf("Cannot create file: %s\n", strerror(errno));
         return -1;
     }
 
+    printf("Starting download of %s...\n", filename);
+
     while ((bytes = read(dataSock, buffer, BUFFER_SIZE)) > 0)
     {
-        fwrite(buffer, bytes, 1, file);
+        if (fwrite(buffer, 1, bytes, file) != bytes)
+        {
+            printf("Error writing to file: %s\n", strerror(errno));
+            fclose(file);
+            return -1;
+        }
+        total_bytes += bytes;
+        printf("\rDownloaded: %zu bytes", total_bytes);
+        fflush(stdout);
     }
 
+    if (bytes < 0)
+    {
+        printf("\nError reading from data connection: %s\n", strerror(errno));
+        fclose(file);
+        return -1;
+    }
+
+    printf("\nDownload complete. Total bytes: %zu\n", total_bytes);
     fclose(file);
+
+    // Wait for transfer complete message on control connection
+    char response[BUFFER_SIZE];
+    int responseCode = getServerResponse(ctrlSock, response);
+    if (responseCode != SV_TRANSFER_COMPLETE)
+    {
+        printf("Transfer did not complete successfully\n");
+        return -1;
+    }
+
     return 0;
 }
 
 int requestFile(int sock, char *path)
 {
     char cmd[BUFFER_SIZE];
+    char response[BUFFER_SIZE];
+
+    printf("Requesting file: %s\n", path);
     sprintf(cmd, "RETR %s\r\n", path);
     write(sock, cmd, strlen(cmd));
+
+    int responseCode = getServerResponse(sock, response);
+    if (responseCode != SV_READY4TRANSFER)
+    {
+        printf("Error requesting file. Server response: %s\n", response);
+        return -1;
+    }
+
     return 0;
 }
 
@@ -304,15 +361,16 @@ int main(int argc, char *argv[])
     printf("=======================\n\n");
 
     int ctrlSock = createSocket(url.ip, FTP_PORT);
-    if (ctrlSock < 0 || getServerResponse(ctrlSock, NULL) != SV_READY4AUTH)
+    if (ctrlSock < 0)
     {
-        printf("Socket to '%s' and port %d failed\n", url.ip, FTP_PORT);
+        printf("Failed to create control socket\n");
         return 1;
     }
 
     if (authenticate(ctrlSock, url.user, url.password) != 0)
     {
-        printf("Authentication failed with username = '%s' and password = '%s'.\n", url.user, url.password);
+        printf("Authentication failed\n");
+        closeConnection(ctrlSock);
         return 1;
     }
 
@@ -320,36 +378,37 @@ int main(int argc, char *argv[])
     int dataPort;
     if (enterPassiveMode(ctrlSock, dataAddr, &dataPort) != 0)
     {
-        printf("Passive mode failed\n");
+        printf("Failed to enter passive mode\n");
+        closeConnection(ctrlSock);
         return 1;
     }
 
     int dataSock = createSocket(dataAddr, dataPort);
     if (dataSock < 0)
     {
-        printf("Socket to '%s:%d' failed\n", dataAddr, dataPort);
+        printf("Failed to create data connection\n");
+        closeConnection(ctrlSock);
         return 1;
     }
 
     if (requestFile(ctrlSock, url.resource) != 0)
     {
-        printf("Unknown resouce '%s' in '%s:%d'\n", url.resource, dataAddr, dataPort);
+        printf("Failed to request file\n");
+        close(dataSock);
+        closeConnection(ctrlSock);
         return 1;
     }
 
     if (downloadFile(ctrlSock, dataSock, url.file) != 0)
     {
-        printf("Error transfering file '%s' from '%s:%d'\n", url.file, dataAddr, dataPort);
-        return 1;
-    }
-
-    if (closeConnection(ctrlSock) != 0)
-    {
-        printf("Sockets close error\n");
+        printf("Failed to download file\n");
+        close(dataSock);
+        closeConnection(ctrlSock);
         return 1;
     }
 
     close(dataSock);
+    closeConnection(ctrlSock);
 
     return 0;
 }
