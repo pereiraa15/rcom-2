@@ -8,3 +8,4 @@ download: ftp_client.c
 
 clean:
 	rm -f download
+	rm -rf downloads/*

@@ -10,6 +10,7 @@
 #include <termios.h>
 #include <errno.h>
 #include <pwd.h>
+#include <time.h>
 
 #define MAX_LENGTH 500
 #define FTP_PORT 21
@@ -150,48 +151,34 @@ int authenticate(int sock, const char *user, const char *pass)
     char cmd[BUFFER_SIZE];
     char response[BUFFER_SIZE];
     int responseCode;
-    int finalResponseCode = -1;
 
-    // Keep reading responses until we get a complete response
-    do
-    {
+    // Get welcome message
+    do {
         responseCode = getServerResponse(sock, response);
-        if (responseCode < 0)
-            return -1;
-            
-        if (responseCode > 0)  // Only update if we got a valid response code
-            finalResponseCode = responseCode;
-            
-    } while (responseCode == 0 || response[3] == '-');  // Continue while we get continuation responses
-
-    if (finalResponseCode != SV_READY4AUTH)
-    {
-        printf("Server not ready. Response code: %d\n", finalResponseCode);
-        return -1;
-    }
+        if (responseCode < 0) return -1;
+    } while (responseCode == 0 || response[3] == '-');
 
     printf("\n=== AUTHENTICATION ===\n");
-    // Now send username
+    // Send username
     printf("Sending USER command...\n");
     sprintf(cmd, "USER %s\r\n", user);
     write(sock, cmd, strlen(cmd));
-    responseCode = getServerResponse(sock, response);
-    if (responseCode != SV_READY4PASS)
-    {
-        printf("Username not accepted (code %d)\n", responseCode);
-        return -1;
-    }
+    
+    do {
+        responseCode = getServerResponse(sock, response);
+        if (responseCode < 0) return -1;
+    } while (responseCode == 0 || response[3] == '-');
 
     // Send password
     printf("Sending PASS command...\n");
     sprintf(cmd, "PASS %s\r\n", pass);
     write(sock, cmd, strlen(cmd));
-    responseCode = getServerResponse(sock, response);
-    if (responseCode != SV_LOGINSUCCESS)
-    {
-        printf("Password not accepted (code %d)\n", responseCode);
-        return -1;
-    }
+    
+    // Read all response lines until we get the final one
+    do {
+        responseCode = getServerResponse(sock, response);
+        if (responseCode < 0) return -1;
+    } while (responseCode == 0 || response[3] == '-');
 
     printf("Authentication successful!\n");
     return 0;
@@ -277,25 +264,38 @@ int downloadFile(int ctrlSock, int dataSock, char *filename)
     printf("\n=== FILE DOWNLOAD ===\n");
     FILE *file;
     char buffer[BUFFER_SIZE];
-    int bytes;
+    ssize_t bytes;
     char filepath[MAX_LENGTH];
-
-    // Use relative path to Downloads folder in project directory
+    size_t total_bytes = 0;
+    time_t start_time = time(NULL);
+    
     snprintf(filepath, sizeof(filepath), "downloads/%s", filename);
-
+    
     if (!(file = fopen(filepath, "wb")))
     {
-        printf("Cannot create file in Downloads folder: %s (Error: %s)\n",
+        printf("Cannot create file in Downloads folder: %s (Error: %s)\n", 
                filepath, strerror(errno));
         return -1;
     }
 
     printf("Downloading to: %s\n", filepath);
-
+    
     while ((bytes = read(dataSock, buffer, BUFFER_SIZE)) > 0)
     {
         fwrite(buffer, bytes, 1, file);
+        total_bytes += bytes;
+        
+        // Calculate speed and progress
+        time_t current_time = time(NULL);
+        double elapsed = difftime(current_time, start_time);
+        if (elapsed > 0) {
+            double speed = total_bytes / (1024.0 * 1024.0) / elapsed; // MB/s
+            printf("\rDownloaded: %.2f MB (%.2f MB/s)", 
+                   total_bytes / (1024.0 * 1024.0), speed);
+            fflush(stdout);
+        }
     }
+    printf("\nDownload completed. Total: %.2f MB\n", total_bytes / (1024.0 * 1024.0));
 
     fclose(file);
     return 0;
