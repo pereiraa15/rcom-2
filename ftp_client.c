@@ -9,6 +9,7 @@
 #include <regex.h>
 #include <termios.h>
 #include <errno.h>
+#include <pwd.h>
 
 #define MAX_LENGTH 500
 #define FTP_PORT 21
@@ -259,48 +260,26 @@ int downloadFile(int ctrlSock, int dataSock, char *filename)
     FILE *file;
     char buffer[BUFFER_SIZE];
     int bytes;
-    size_t total_bytes = 0;
-
-    if (!(file = fopen(filename, "wb")))
+    char filepath[MAX_LENGTH];
+    
+    // Use relative path to Downloads folder in project directory
+    snprintf(filepath, sizeof(filepath), "downloads/%s", filename);
+    
+    if (!(file = fopen(filepath, "wb")))
     {
-        printf("Cannot create file: %s\n", strerror(errno));
+        printf("Cannot create file in Downloads folder: %s (Error: %s)\n", 
+               filepath, strerror(errno));
         return -1;
     }
 
-    printf("Starting download of %s...\n", filename);
-
+    printf("Downloading to: %s\n", filepath);
+    
     while ((bytes = read(dataSock, buffer, BUFFER_SIZE)) > 0)
     {
-        if (fwrite(buffer, 1, bytes, file) != bytes)
-        {
-            printf("Error writing to file: %s\n", strerror(errno));
-            fclose(file);
-            return -1;
-        }
-        total_bytes += bytes;
-        printf("\rDownloaded: %zu bytes", total_bytes);
-        fflush(stdout);
+        fwrite(buffer, bytes, 1, file);
     }
 
-    if (bytes < 0)
-    {
-        printf("\nError reading from data connection: %s\n", strerror(errno));
-        fclose(file);
-        return -1;
-    }
-
-    printf("\nDownload complete. Total bytes: %zu\n", total_bytes);
     fclose(file);
-
-    // Wait for transfer complete message on control connection
-    char response[BUFFER_SIZE];
-    int responseCode = getServerResponse(ctrlSock, response);
-    if (responseCode != SV_TRANSFER_COMPLETE)
-    {
-        printf("Transfer did not complete successfully\n");
-        return -1;
-    }
-
     return 0;
 }
 
